@@ -1,8 +1,8 @@
 import jwt from "jsonwebtoken";
 import { config } from "../config/env.js";
-import { db } from "../db/memory.js";
+import { User } from "../db/models/user.model.js";
 
-export const auth = (req, res, next) => {
+export const auth = async (req, res, next) => {
   const header = req.headers.authorization;
   if (!header || !header.startsWith("Bearer ")) {
     return res.status(401).json({ error: "missing_token", message: "Authorization header is required" });
@@ -12,14 +12,14 @@ export const auth = (req, res, next) => {
 
   try {
     const payload = jwt.verify(token, config.jwtSecret);
-    const user = db.users.find((u) => u.id === payload.sub);
+    const user = await User.findById(payload.sub).lean().exec();
 
     if (!user) {
       return res.status(401).json({ error: "invalid_token", message: "User not found" });
     }
 
     req.user = {
-      id: user.id,
+      id: user._id,
       email: user.email,
       name: user.name,
       avatarUrl: user.avatarUrl,

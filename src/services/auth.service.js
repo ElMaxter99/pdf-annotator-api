@@ -1,21 +1,34 @@
-import { db } from "../db/memory.js";
+import { User } from "../db/models/user.model.js";
+import { Workspace } from "../db/models/workspace.model.js";
+import { RefreshToken } from "../db/models/refreshToken.model.js";
 import { signAccessToken, signRefreshToken, verifyToken } from "../utils/jwt.js";
 
 const PROJECT_KEY = "pdf-annotator";
 const ACCESS_TOKEN_TTL = 900; // 15 minutes in seconds
 
-const buildWorkspacePayload = (userId) => {
-  return db.workspaces
-    .filter((workspace) => workspace.members.some((member) => member.userId === userId))
-    .map((workspace) => {
-      const membership = workspace.members.find((member) => member.userId === userId);
-      return {
-        id: workspace.id,
-        name: workspace.name,
-        role: membership.role,
-        updatedAt: workspace.updatedAt,
-      };
-    });
+const toIsoString = (value) => {
+  if (!value) return value;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "string") return value;
+  return new Date(value).toISOString();
+};
+
+const buildWorkspacePayload = async (userId) => {
+  const workspaces = await Workspace.find({
+    "members.userId": userId,
+  })
+    .lean()
+    .exec();
+
+  return workspaces.map((workspace) => {
+    const membership = workspace.members.find((member) => member.userId === userId);
+    return {
+      id: workspace._id,
+      name: workspace.name,
+      role: membership?.role ?? "viewer",
+      updatedAt: toIsoString(workspace.updatedAt),
+    };
+  });
 };
 
 const buildRolesMap = (workspaces) => {
@@ -40,7 +53,7 @@ export const login = async ({ email, password, projectKey }) => {
     throw err;
   }
 
-  const user = db.users.find((item) => item.email === email);
+  const user = await User.findOne({ email }).lean().exec();
 
   if (!user || user.password !== password) {
     const err = new Error("Correo o contraseña incorrectos");
@@ -49,25 +62,25 @@ export const login = async ({ email, password, projectKey }) => {
     throw err;
   }
 
-  const workspaces = buildWorkspacePayload(user.id);
+  const workspaces = await buildWorkspacePayload(user._id);
   const roles = buildRolesMap(workspaces);
   const defaultWorkspaceId = user.defaultWorkspaceId || workspaces[0]?.id || null;
 
   const accessToken = signAccessToken({
-    sub: user.id,
+    sub: user._id,
     roles,
     defaultWorkspaceId,
   });
 
-  const refreshToken = signRefreshToken({ sub: user.id });
-  db.refreshTokens.set(refreshToken, { userId: user.id });
+  const refreshToken = signRefreshToken({ sub: user._id });
+  await RefreshToken.create({ token: refreshToken, userId: user._id });
 
   return {
     accessToken,
     refreshToken,
     expiresIn: ACCESS_TOKEN_TTL,
     user: {
-      id: user.id,
+      id: user._id,
       name: user.name,
       email: user.email,
       avatarUrl: user.avatarUrl,
@@ -85,7 +98,7 @@ export const refresh = async (token) => {
     throw err;
   }
 
-  const stored = db.refreshTokens.get(token);
+  const stored = await RefreshToken.findOne({ token }).lean().exec();
   if (!stored) {
     const err = new Error("refreshToken inválido o expirado");
     err.status = 401;
@@ -96,25 +109,25 @@ export const refresh = async (token) => {
   try {
     const payload = verifyToken(token);
     const userId = payload.sub;
-    const user = db.users.find((item) => item.id === userId);
+    const user = await User.findById(userId).lean().exec();
 
     if (!user) {
-      db.refreshTokens.delete(token);
+      await RefreshToken.deleteOne({ token });
       const err = new Error("Usuario no encontrado");
       err.status = 401;
       err.code = "invalid_refresh_token";
       throw err;
     }
 
-    const workspaces = buildWorkspacePayload(userId);
+    const workspaces = await buildWorkspacePayload(userId);
     const roles = buildRolesMap(workspaces);
     const defaultWorkspaceId = user.defaultWorkspaceId || workspaces[0]?.id || null;
 
-    db.refreshTokens.delete(token);
+    await RefreshToken.deleteOne({ token });
 
     const accessToken = signAccessToken({ sub: userId, roles, defaultWorkspaceId });
     const newRefreshToken = signRefreshToken({ sub: userId });
-    db.refreshTokens.set(newRefreshToken, { userId });
+    await RefreshToken.create({ token: newRefreshToken, userId });
 
     return {
       accessToken,
@@ -122,7 +135,7 @@ export const refresh = async (token) => {
       expiresIn: ACCESS_TOKEN_TTL,
     };
   } catch (error) {
-    db.refreshTokens.delete(token);
+    await RefreshToken.deleteOne({ token });
     const err = new Error("refreshToken inválido o expirado");
     err.status = 401;
     err.code = "invalid_refresh_token";
@@ -132,9 +145,5 @@ export const refresh = async (token) => {
 
 export const logout = async (user) => {
   if (!user) return;
-  for (const [token, payload] of db.refreshTokens.entries()) {
-    if (payload.userId === user.id) {
-      db.refreshTokens.delete(token);
-    }
-  }
+  await RefreshToken.deleteMany({ userId: user.id });
 };
