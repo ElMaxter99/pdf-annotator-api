@@ -1,10 +1,12 @@
+import bcrypt from "bcryptjs";
+import { config } from "../config/env.js";
 import { User } from "../db/models/user.model.js";
 import { Workspace } from "../db/models/workspace.model.js";
 import { RefreshToken } from "../db/models/refreshToken.model.js";
 import { signAccessToken, signRefreshToken, verifyToken } from "../utils/jwt.js";
 
 const PROJECT_KEY = "pdf-annotator";
-const ACCESS_TOKEN_TTL = 900; // 15 minutes in seconds
+const ACCESS_TOKEN_TTL = config.jwt.accessTokenTtlSeconds || 900; // seconds
 
 const toIsoString = (value) => {
   if (!value) return value;
@@ -55,7 +57,17 @@ export const login = async ({ email, password, projectKey }) => {
 
   const user = await User.findOne({ email }).lean().exec();
 
-  if (!user || user.password !== password) {
+  if (!user) {
+    const err = new Error("Correo o contraseña incorrectos");
+    err.status = 401;
+    err.code = "invalid_credentials";
+    throw err;
+  }
+
+  const hashedPassword = user.password ?? "";
+  const passwordMatches = await bcrypt.compare(password, hashedPassword);
+
+  if (!passwordMatches) {
     const err = new Error("Correo o contraseña incorrectos");
     err.status = 401;
     err.code = "invalid_credentials";

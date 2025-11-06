@@ -25,8 +25,13 @@ services:
       - MONGO_URI=${MONGO_URI:-mongodb://mongo:27017/pdf-annotator}
       - MONGO_DB_NAME=${MONGO_DB_NAME:-pdf-annotator}
       - PORT=${PORT:-3000}
+      - JWT_KEYS_DIR=${JWT_KEYS_DIR:-/app/keys}
+      - JWT_EXPIRES_IN=${JWT_EXPIRES_IN:-15m}
+      - REFRESH_EXPIRES_IN=${REFRESH_EXPIRES_IN:-30d}
     ports:
       - "${API_PORT:-3000}:${PORT:-3000}"
+    volumes:
+      - ./keys:/app/keys
     command: ["node", "src/server.js"]
     restart: unless-stopped
 

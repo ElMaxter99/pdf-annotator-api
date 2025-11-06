@@ -1,16 +1,31 @@
 import jwt from "jsonwebtoken";
 import { config } from "../config/env.js";
 
-export const signAccessToken = ({ sub, roles, defaultWorkspaceId }) =>
-  jwt.sign({ roles, defaultWorkspaceId }, config.jwtSecret, {
-    expiresIn: config.jwtExpiresIn,
-    subject: sub,
+const signToken = (payload, options = {}) =>
+  jwt.sign(payload, config.jwt.privateKey, {
+    algorithm: config.jwt.algorithm,
+    ...options,
   });
+
+export const signAccessToken = ({ sub, roles, defaultWorkspaceId }) =>
+  signToken(
+    { roles, defaultWorkspaceId },
+    {
+      expiresIn: config.jwt.expiresIn,
+      subject: sub,
+    }
+  );
 
 export const signRefreshToken = ({ sub }) =>
-  jwt.sign({}, config.jwtSecret, {
-    expiresIn: config.refreshExpiresIn,
-    subject: sub,
-  });
+  signToken(
+    {},
+    {
+      expiresIn: config.jwt.refreshExpiresIn,
+      subject: sub,
+    }
+  );
 
-export const verifyToken = (token) => jwt.verify(token, config.jwtSecret);
+export const verifyToken = (token) =>
+  jwt.verify(token, config.jwt.publicKey, {
+    algorithms: [config.jwt.algorithm],
+  });

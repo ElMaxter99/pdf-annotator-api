@@ -1,6 +1,5 @@
-import jwt from "jsonwebtoken";
-import { config } from "../config/env.js";
 import { User } from "../db/models/user.model.js";
+import { verifyToken } from "../utils/jwt.js";
 
 export const auth = async (req, res, next) => {
   const header = req.headers.authorization;
@@ -11,7 +10,7 @@ export const auth = async (req, res, next) => {
   const token = header.split(" ")[1];
 
   try {
-    const payload = jwt.verify(token, config.jwtSecret);
+    const payload = verifyToken(token);
     const user = await User.findById(payload.sub).lean().exec();
 
     if (!user) {

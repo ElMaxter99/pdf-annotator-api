@@ -14,9 +14,9 @@ const seedUsers = async () => {
 
   await User.create({
     _id: "usr_123",
-    email: "editor@acme.com",
-    password: "StrongPassw0rd!",
-    name: "Ana Campos",
+    email: "test@test.com",
+    password: "Alvaro@1234",
+    name: "Test Alvaro",
     avatarUrl: "https://cdn.example.com/avatars/usr_123.png",
     defaultWorkspaceId: "wrk_001",
   });
