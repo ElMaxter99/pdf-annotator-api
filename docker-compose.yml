@@ -1,0 +1,39 @@
+version: "3.9"
+
+services:
+  mongo:
+    image: mongo:7.0
+    restart: unless-stopped
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    depends_on:
+      mongo:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - MONGO_URI=${MONGO_URI:-mongodb://mongo:27017/pdf-annotator}
+      - MONGO_DB_NAME=${MONGO_DB_NAME:-pdf-annotator}
+      - PORT=${PORT:-3000}
+      - JWT_KEYS_DIR=${JWT_KEYS_DIR:-/app/keys}
+      - JWT_EXPIRES_IN=${JWT_EXPIRES_IN:-15m}
+      - REFRESH_EXPIRES_IN=${REFRESH_EXPIRES_IN:-30d}
+    ports:
+      - "${API_PORT:-3000}:${PORT:-3000}"
+    volumes:
+      - ./keys:/app/keys
+    command: ["node", "src/server.js"]
+    restart: unless-stopped
+
+volumes:
+  mongo_data:

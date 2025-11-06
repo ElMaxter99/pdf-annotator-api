@@ -1,10 +1,17 @@
-import { db } from "../db/memory.js";
+import { Workspace } from "../db/models/workspace.model.js";
+import { Template } from "../db/models/template.model.js";
+import { TemplateVersion } from "../db/models/templateVersion.model.js";
 import { versionConflict, parseIfMatchVersion } from "../utils/versioning.js";
 
-const now = () => new Date().toISOString();
+const toIsoString = (value) => {
+  if (!value) return value;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "string") return value;
+  return new Date(value).toISOString();
+};
 
-const findWorkspaceMembership = (workspaceId, userId) => {
-  const workspace = db.workspaces.find((item) => item.id === workspaceId);
+const findWorkspaceMembership = async (workspaceId, userId) => {
+  const workspace = await Workspace.findById(workspaceId).lean().exec();
   if (!workspace) {
     const err = new Error("Workspace no encontrado");
     err.status = 404;
@@ -23,12 +30,28 @@ const findWorkspaceMembership = (workspaceId, userId) => {
   return { workspace, membership };
 };
 
-const findTemplateIndex = (workspaceId, templateId) =>
-  db.templates.findIndex((item) => item.workspaceId === workspaceId && item.id === templateId);
+const formatTemplate = (template) => ({
+  id: template._id ?? template.id,
+  workspaceId: template.workspaceId,
+  name: template.name,
+  version: template.version,
+  guidesEnabled: Boolean(template.guidesEnabled),
+  guideSettings: {
+    showGrid: Boolean(template.guideSettings?.showGrid),
+    snapToGrid: Boolean(template.guideSettings?.snapToGrid),
+    gridSize: Number.isFinite(template.guideSettings?.gridSize)
+      ? template.guideSettings.gridSize
+      : 12,
+  },
+  pages: Array.isArray(template.pages) ? template.pages : [],
+  createdAt: toIsoString(template.createdAt),
+  updatedAt: toIsoString(template.updatedAt),
+});
 
 export const list = async (workspaceId, userId) => {
-  findWorkspaceMembership(workspaceId, userId);
-  return db.templates.filter((template) => template.workspaceId === workspaceId);
+  await findWorkspaceMembership(workspaceId, userId);
+  const templates = await Template.find({ workspaceId }).lean().exec();
+  return templates.map(formatTemplate);
 };
 
 const normalizeTemplatePayload = (payload) => ({
@@ -51,7 +74,7 @@ export const save = async ({
   body,
   ifMatch,
 }) => {
-  findWorkspaceMembership(workspaceId, userId);
+  await findWorkspaceMembership(workspaceId, userId);
 
   if (!body?.name || typeof body.version !== "number") {
     const err = new Error("Nombre y versión son obligatorios");
@@ -60,8 +83,7 @@ export const save = async ({
     throw err;
   }
 
-  const index = findTemplateIndex(workspaceId, templateId);
-  const current = index !== -1 ? db.templates[index] : null;
+  const current = await Template.findOne({ _id: templateId, workspaceId }).lean().exec();
 
   const expectedVersion = parseIfMatchVersion(ifMatch);
   if (expectedVersion === null) {
@@ -71,56 +93,52 @@ export const save = async ({
     throw err;
   }
 
-  if (index === -1) {
+  if (!current) {
     if (expectedVersion !== 0 || body.version !== 0) {
       throw versionConflict(0);
     }
 
-    const template = {
-      id: templateId,
+    const templateDoc = await Template.create({
+      _id: templateId,
       workspaceId,
       version: 1,
-      createdAt: now(),
-      updatedAt: now(),
       ...normalizeTemplatePayload(body),
-    };
+    });
 
-    db.templates.push(template);
-    return { template, created: true };
+    return { template: formatTemplate(templateDoc.toObject()), created: true };
   }
 
   if (current.version !== expectedVersion || body.version !== current.version) {
     throw versionConflict(current.version);
   }
 
-  const updated = {
-    ...current,
-    ...normalizeTemplatePayload(body),
-    version: current.version + 1,
-    updatedAt: now(),
-  };
+  const updated = await Template.findOneAndUpdate(
+    { _id: templateId, workspaceId },
+    {
+      ...normalizeTemplatePayload(body),
+      version: current.version + 1,
+    },
+    { new: true, lean: true }
+  ).exec();
 
-  db.templates[index] = updated;
-  return { template: updated, created: false };
+  return { template: formatTemplate(updated), created: false };
 };
 
 export const remove = async ({ workspaceId, templateId, userId }) => {
-  findWorkspaceMembership(workspaceId, userId);
-  const index = findTemplateIndex(workspaceId, templateId);
-  if (index === -1) {
+  await findWorkspaceMembership(workspaceId, userId);
+  const existing = await Template.findOne({ _id: templateId, workspaceId }).lean().exec();
+  if (!existing) {
     const err = new Error("Plantilla no encontrada");
     err.status = 404;
     err.code = "template_not_found";
     throw err;
   }
-  db.templates.splice(index, 1);
+  await Template.deleteOne({ _id: templateId, workspaceId }).exec();
 };
 
 export const createVersion = async ({ workspaceId, templateId, userId, body }) => {
-  findWorkspaceMembership(workspaceId, userId);
-  const template = db.templates.find(
-    (item) => item.workspaceId === workspaceId && item.id === templateId
-  );
+  await findWorkspaceMembership(workspaceId, userId);
+  const template = await Template.findOne({ _id: templateId, workspaceId }).lean().exec();
 
   if (!template) {
     const err = new Error("Plantilla no encontrada");
@@ -136,26 +154,23 @@ export const createVersion = async ({ workspaceId, templateId, userId, body }) =
     throw err;
   }
 
-  const historyEntries = db.templateVersions.filter((item) => item.templateId === templateId);
+  const historyEntries = await TemplateVersion.find({ templateId }).lean().exec();
   const nextVersion =
     Math.max(template.version, body.sourceVersion, ...historyEntries.map((item) => item.version), 0) + 1;
 
-  const versionEntry = {
-    id: `${templateId}:v${nextVersion}`,
+  const versionDoc = await TemplateVersion.create({
+    _id: `${templateId}:v${nextVersion}`,
     templateId,
     version: nextVersion,
     label: body.label,
     sourceVersion: body.sourceVersion,
-    createdAt: now(),
-  };
-
-  db.templateVersions.push(versionEntry);
+  });
 
   return {
-    id: versionEntry.id,
-    templateId: versionEntry.templateId,
-    version: versionEntry.version,
-    label: versionEntry.label,
-    createdAt: versionEntry.createdAt,
+    id: versionDoc.id,
+    templateId: versionDoc.templateId,
+    version: versionDoc.version,
+    label: versionDoc.label,
+    createdAt: toIsoString(versionDoc.createdAt),
   };
 };
